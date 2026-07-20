@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "cotizador",
+  "name": "Cotizador",
+  "version": "1.0.0",
+  "publisher": "NOPAL Labs",
+  "category": "Producción",
+  "description": "Calcula el costo estimado de trabajos de impresión 3D, láser o CNC y genera cotizaciones listas para enviar.",
+  "permissions": ["Leer archivos de la biblioteca", "Guardar catálogos de materiales y máquinas", "Guardar el historial de cotizaciones"],
+  "compatibility": ["Impresión 3D", "Láser", "CNC"],
+  "frontend": {
+    "script": "frontend/cotizador.js",
+    "style": "frontend/cotizador.css",
+    "section": "pricing"
+  },
+  "backend": {
+    "entry": "backend/router.py"
+  }
+}
