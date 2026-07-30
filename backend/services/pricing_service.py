@@ -604,12 +604,14 @@ def compute_quote(
         else:
             cached = _get_or_extract(source_path, section, rel_path, estimate_print_gcode_quantities)
             grams = cached["filament_grams_direct"]
+            # spoolman_diameter_mm/density_g_cm3: el carrete real de Spoolman
+            # (si el usuario lo linkeó, ver renderPricingSpoolmanSection en el
+            # frontend) pisa el diámetro/densidad del material genérico del
+            # catálogo local -- mismo criterio que detail_level más abajo.
+            diameter_mm = overrides.get("spoolman_diameter_mm") or material.get("diameter_mm", 1.75)
+            density_g_cm3 = overrides.get("spoolman_density_g_cm3") or material.get("density_g_cm3", 1.24)
             if grams is None and cached["filament_length_mm"] is not None:
-                grams = _length_to_mass(
-                    cached["filament_length_mm"],
-                    material.get("diameter_mm", 1.75),
-                    material.get("density_g_cm3", 1.24),
-                )
+                grams = _length_to_mass(cached["filament_length_mm"], diameter_mm, density_g_cm3)
             extracted["filament_g"] = grams
             extracted["width_mm"] = cached.get("width_mm")
             extracted["height_mm"] = cached.get("height_mm")
@@ -653,8 +655,19 @@ def compute_quote(
             material_cost_missing = True
         else:
             grams_total = extracted["filament_g"] * quantity
-            material_cost = (grams_total / 1000) * material["unit_cost"] if material["unit"] == "kg" else grams_total * material["unit_cost"]
-            material_detail = f"{material['name']} ({grams_total:.2f} g)"
+            spool_unit_cost_per_g = overrides.get("spoolman_unit_cost_per_g")
+            if spool_unit_cost_per_g is not None:
+                material_cost = grams_total * spool_unit_cost_per_g
+            else:
+                material_cost = (grams_total / 1000) * material["unit_cost"] if material["unit"] == "kg" else grams_total * material["unit_cost"]
+            material_label = overrides.get("spoolman_material_label") or material["name"]
+            material_detail = f"{material_label} ({grams_total:.2f} g)"
+            available_g = overrides.get("spoolman_available_g")
+            if available_g is not None and grams_total > available_g:
+                warnings.append(
+                    f"El carrete de Spoolman tiene {available_g:.0f} g disponibles, pero este trabajo necesita "
+                    f"{grams_total:.0f} g — no alcanza."
+                )
     elif material["kind"] == "sheet":
         if extracted["bounding_box_area_m2"] is None:
             material_cost_missing = True
