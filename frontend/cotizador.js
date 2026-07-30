@@ -74,6 +74,17 @@
     let machineAddKindSwitch = null;
     let settingsMarginModeSwitch = null;
 
+    // ── Integración con el plugin Materiales (Spoolman) ──
+    // Cotizador no depende de que Spoolman esté instalado: si no está, o no
+    // está configurado, el selector de carrete simplemente no aparece (o
+    // muestra un aviso) y el cotizador sigue funcionando con el catálogo de
+    // materiales genéricos de siempre. Nunca se inventa un costo si no hay
+    // datos reales de Spoolman.
+    let spoolmanPluginInstalled = false;
+    let spoolmanConfigured = false;
+    let spoolmanSpools = [];
+    let pricingLinkedSpoolId = '';
+
     function pricingSection() {
         return PRICING_JOB_TYPE_MAP[pricingJobType].section;
     }
@@ -134,6 +145,12 @@
             schedulePricingQuoteRefresh();
         });
         document.getElementById('pricing-color-select')?.addEventListener('change', () => { pricingLastSavedQuoteId = null; });
+        document.getElementById('pricing-spoolman-select')?.addEventListener('change', event => {
+            pricingLinkedSpoolId = event.target.value;
+            pricingLastSavedQuoteId = null;
+            renderSpoolmanSpoolInfo();
+            schedulePricingQuoteRefresh();
+        });
 
         const qtyInput = document.getElementById('pricing-quantity-input');
         qtyInput?.addEventListener('input', () => {
@@ -268,6 +285,7 @@
         updatePricingJobTypeTheme();
         renderPricingMaterialSelect();
         renderPricingMachineSelect();
+        renderSpoolmanField();
         loadPricingFileBrowser('');
         renderPricingCostSummary(null);
         renderPricingFileInfo(null);
@@ -336,6 +354,110 @@
         }
         renderPricingMaterialSelect();
         renderPricingMachineSelect();
+        await loadSpoolmanStatus();
+        renderSpoolmanField();
+    }
+
+    // El plugin Materiales (Spoolman) es opcional e independiente -- si no
+    // está instalado, /api/spoolman/config ni siquiera existe (404). Si está
+    // instalado pero nunca se configuró un servidor, existe pero devuelve
+    // configured:false. En ningún caso se inventa un costo: sin datos reales
+    // de Spoolman, el selector de carrete se oculta o avisa, y el cotizador
+    // sigue funcionando con el catálogo de materiales genéricos de siempre.
+    async function loadSpoolmanStatus() {
+        try {
+            const configRes = await fetch('/api/spoolman/config');
+            if (!configRes.ok) {
+                spoolmanPluginInstalled = false;
+                spoolmanConfigured = false;
+                spoolmanSpools = [];
+                return;
+            }
+            spoolmanPluginInstalled = true;
+            const config = await configRes.json();
+            spoolmanConfigured = !!(config.configured && config.connected);
+            if (!spoolmanConfigured) {
+                spoolmanSpools = [];
+                return;
+            }
+            const spoolsRes = await fetch('/api/spoolman/spools');
+            spoolmanSpools = spoolsRes.ok ? (await spoolsRes.json()).spools : [];
+        } catch (error) {
+            console.error(error);
+            spoolmanPluginInstalled = false;
+            spoolmanConfigured = false;
+            spoolmanSpools = [];
+        }
+    }
+
+    function renderSpoolmanField() {
+        const field = document.getElementById('pricing-spoolman-field');
+        const select = document.getElementById('pricing-spoolman-select');
+        const notice = document.getElementById('pricing-spoolman-notice');
+        if (!field || !select || !notice) return;
+
+        // Solo tiene sentido para impresión 3D (filamento) -- láser/CNC no
+        // consumen carrete.
+        const relevant = pricingJobType === 'printer';
+        field.hidden = !relevant;
+        if (!relevant) return;
+
+        if (!spoolmanPluginInstalled) {
+            select.hidden = true;
+            notice.hidden = false;
+            notice.textContent = 'El consumo real de filamento (colores, tipo y disponibilidad) solo se ve acá si tenés instalado el plugin Materiales (Spoolman). Mientras tanto se usa el costo del material genérico.';
+            renderSpoolmanSpoolInfo();
+            return;
+        }
+        if (!spoolmanConfigured) {
+            select.hidden = true;
+            notice.hidden = false;
+            notice.textContent = 'El plugin Materiales (Spoolman) está instalado pero todavía no está conectado a un servidor -- configuralo en Configuración → Plugins → Materiales para ver el inventario real acá.';
+            renderSpoolmanSpoolInfo();
+            return;
+        }
+
+        select.hidden = false;
+        notice.hidden = true;
+
+        const prevValue = pricingLinkedSpoolId;
+        const options = spoolmanSpools.map(spool => {
+            const filament = spool.filament || {};
+            const available = Math.round(spool.available_weight ?? spool.remaining_weight ?? 0);
+            const label = [filament.material, filament.name].filter(Boolean).join(' ') || 'Carrete';
+            return `<option value="${esc(String(spool.id))}">${esc(label)} — ${available} g disponibles</option>`;
+        }).join('');
+        select.innerHTML = `<option value="">Sin carrete vinculado (usar costo del material genérico)</option>${options}`;
+        if (spoolmanSpools.some(s => String(s.id) === prevValue)) {
+            select.value = prevValue;
+        } else {
+            pricingLinkedSpoolId = '';
+        }
+        renderSpoolmanSpoolInfo();
+    }
+
+    function getLinkedSpool() {
+        return spoolmanSpools.find(s => String(s.id) === pricingLinkedSpoolId) || null;
+    }
+
+    function renderSpoolmanSpoolInfo() {
+        const info = document.getElementById('pricing-spoolman-info');
+        if (!info) return;
+        const spool = getLinkedSpool();
+        if (!spool) {
+            info.hidden = true;
+            info.innerHTML = '';
+            return;
+        }
+        const filament = spool.filament || {};
+        const colorHex = filament.color_hex ? `#${filament.color_hex}` : '#9a8258';
+        const available = Math.round(spool.available_weight ?? spool.remaining_weight ?? 0);
+        info.hidden = false;
+        info.innerHTML = `
+            <span class="pricing-spoolman-color-dot" style="background:${esc(colorHex)}"></span>
+            <span>${esc(filament.material || 'Filamento')}${filament.name ? ' · ' + esc(filament.name) : ''}</span>
+            <strong>${available} g disponibles</strong>
+        `;
     }
 
     function renderPricingMaterialSelect() {
@@ -553,6 +675,24 @@
         const validExtraCosts = pricingExtraCosts.filter(c => c.label && c.amount);
         const detailLevel = document.querySelector('#pricing-detail-level-switch .option-switch-btn.active')?.dataset.value || 'standard';
 
+        const overrides = { detail_level: detailLevel };
+        const linkedSpool = pricingJobType === 'printer' ? getLinkedSpool() : null;
+        if (linkedSpool) {
+            const filament = linkedSpool.filament || {};
+            // Mismo criterio que ya usa spoolman.js: precio/peso a nivel
+            // carrete pisan al del tipo de filamento si están definidos.
+            const price = linkedSpool.price || filament.price;
+            const nominalWeightG = linkedSpool.initial_weight || filament.weight;
+            if (price && nominalWeightG) {
+                overrides.spoolman_unit_cost_per_g = price / nominalWeightG;
+            }
+            if (filament.diameter) overrides.spoolman_diameter_mm = filament.diameter;
+            if (filament.density) overrides.spoolman_density_g_cm3 = filament.density;
+            overrides.spoolman_material_label = [filament.material, filament.name].filter(Boolean).join(' ') || 'Carrete Spoolman';
+            const availableG = linkedSpool.available_weight ?? linkedSpool.remaining_weight;
+            if (availableG != null) overrides.spoolman_available_g = availableG;
+        }
+
         const formData = new FormData();
         formData.append('path', relPath);
         formData.append('section', pricingSection());
@@ -560,7 +700,7 @@
         formData.append('quantity', quantity);
         if (machineId) formData.append('machine_id', machineId);
         formData.append('extra_costs', JSON.stringify(validExtraCosts));
-        formData.append('overrides', JSON.stringify({ detail_level: detailLevel }));
+        formData.append('overrides', JSON.stringify(overrides));
 
         try {
             const response = await fetch('/api/pricing/quote', { method: 'POST', body: formData });
@@ -635,7 +775,9 @@
                     <span class="pricing-cost-line-amount${line.missing ? ' missing' : ''}">${line.missing ? '—' : fmt(line.amount)}</span>
                 </span>
             </div>
-        `; }).join('');
+        `; }).join('') + (result.warnings || []).map(warning => `
+            <div class="pricing-cost-warning">${esc(warning)}</div>
+        `).join('');
 
         const subtotalAmountEl = document.getElementById('pricing-cost-subtotal-amount');
         if (subtotalAmountEl) subtotalAmountEl.textContent = fmt(result.costs.subtotal);
@@ -1633,6 +1775,14 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div class="pricing-field pricing-field-wide" id="pricing-spoolman-field" hidden>
+                                    <label>Carrete de Spoolman <span class="pricing-spoolman-optional">(opcional)</span></label>
+                                    <select id="pricing-spoolman-select">
+                                        <option value="">Sin carrete vinculado (usar costo del material genérico)</option>
+                                    </select>
+                                    <div class="pricing-spoolman-info" id="pricing-spoolman-info" hidden></div>
+                                    <p class="pricing-spoolman-notice" id="pricing-spoolman-notice" hidden></p>
+                                </div>
                                 <label class="pricing-label">Nivel de detalle</label>
                                 <div class="option-switch" id="pricing-detail-level-switch">
                                     <button type="button" class="option-switch-btn" data-value="economic">Económico</button>
@@ -1728,29 +1878,29 @@
                                 </div>
                             </div>
                         </aside>
-                    </div>
 
-                    <div class="recent-section pricing-recent-section">
-                        <div class="section-title">
-                            <h2>Cotizaciones recientes</h2>
-                        </div>
-                        <div class="models-table-wrapper">
-                            <table class="models-table" id="pricing-quotes-table">
-                                <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>Archivo</th>
-                                        <th>Tipo</th>
-                                        <th>Total</th>
-                                        <th>Fecha</th>
-                                        <th>Estado</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody id="pricing-quotes-tbody">
-                                    <tr><td colspan="7" class="empty-state">Todavía no hay cotizaciones guardadas.</td></tr>
-                                </tbody>
-                            </table>
+                        <div class="recent-section pricing-recent-section">
+                            <div class="section-title">
+                                <h2>Cotizaciones recientes</h2>
+                            </div>
+                            <div class="models-table-wrapper">
+                                <table class="models-table" id="pricing-quotes-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Archivo</th>
+                                            <th>Tipo</th>
+                                            <th>Total</th>
+                                            <th>Fecha</th>
+                                            <th>Estado</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pricing-quotes-tbody">
+                                        <tr><td colspan="7" class="empty-state">Todavía no hay cotizaciones guardadas.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </main>
