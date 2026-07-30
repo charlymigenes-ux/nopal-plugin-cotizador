@@ -9,6 +9,9 @@ dispositivos reales registrados en Impresoras/Láser/CNC — acá solo importa
 "cuánto cuesta usarla"), ajustes globales (moneda, precio del kWh, margen,
 tarifa de mano de obra) e historial de cotizaciones guardadas.
 
+<img width="1672" height="941" alt="Car_Cotizador" src="https://github.com/user-attachments/assets/0079d8ea-0467-456a-9fe1-fa841df675be" />
+
+
 ## Instalación
 
 Desde NOPAL → Configuración → Galería de plugins → Cotizador → Instalar.
